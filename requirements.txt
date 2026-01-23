@@ -1,0 +1,7 @@
+customtkinter
+winshell
+pywin32
+pillow
+darkdetect
+psutil
+send2trash
