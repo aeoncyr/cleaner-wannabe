@@ -3,6 +3,7 @@ import threading
 import psutil
 import os
 import datetime
+import tkinter.filedialog as filedialog
 from core.scanner import Scanner
 from core.cleaner import Cleaner
 from core.analyzer import Analyzer
@@ -157,6 +158,12 @@ class CleanerApp(ctk.CTk):
         self.current_frame = None
         self.drives = self.get_available_drives()
         self.selected_drive = ctk.StringVar(value="C:\\")
+        self.scan_results = {}
+        self.is_scanning = False
+        self.is_cleaning = False
+        self.is_scanning_dupes = False
+        self.is_scanning_large = False
+        self.is_loading_apps = False
         
         # UI Initialization
         self.init_sidebar()
@@ -169,9 +176,11 @@ class CleanerApp(ctk.CTk):
             for partition in psutil.disk_partitions():
                 if 'fixed' in partition.opts or 'removable' in partition.opts:
                     drives.append(partition.device)
-        except:
-             drives.append("C:\\")
-        return drives
+        except Exception:
+            drives.append("C:\\")
+        if not drives:
+            drives.append("C:\\")
+        return sorted(set(drives))
 
     def init_sidebar(self):
         self.sidebar = ctk.CTkFrame(self, width=300, corner_radius=0, fg_color=THEME["bg_sidebar"])
@@ -222,6 +231,107 @@ class CleanerApp(ctk.CTk):
     def clear_main(self):
         for widget in self.main_container.winfo_children():
             widget.destroy()
+
+    def _append_log(self, text):
+        if hasattr(self, "log_box") and self.log_box.winfo_exists():
+            self.log_box.insert("end", text + "\n")
+            self.log_box.see("end")
+
+    def _set_scan_status(self, text, progress=None):
+        if hasattr(self, "scan_status") and self.scan_status.winfo_exists():
+            self.scan_status.configure(text=text)
+        if progress is not None and hasattr(self, "scan_progress") and self.scan_progress.winfo_exists():
+            self.scan_progress.set(progress)
+
+    def _safe_config(self, widget, **kwargs):
+        try:
+            if widget and widget.winfo_exists():
+                widget.configure(**kwargs)
+        except Exception:
+            pass
+
+    def _select_all_options(self):
+        for var in self.check_vars.values():
+            var.set(True)
+
+    def _select_none_options(self):
+        for var in self.check_vars.values():
+            var.set(False)
+
+    def _confirm_and_delete(self, filepath, row=None):
+        if not filepath:
+            return
+        if not messagebox.askyesno("Confirm Delete", f"Move to Recycle Bin?\n\n{filepath}"):
+            return
+        ok, msg = self.analyzer.delete_file(filepath)
+        if ok:
+            if row is not None and row.winfo_exists():
+                row.destroy()
+            messagebox.showinfo("Delete Complete", msg)
+        else:
+            messagebox.showerror("Delete Failed", msg)
+
+    def _confirm_uninstall(self, app):
+        if not app or not app.get("uninstall"):
+            messagebox.showerror("Uninstall Failed", "No uninstall command was found for this app.")
+            return
+        if not messagebox.askyesno("Confirm Uninstall", f"Launch uninstaller for '{app.get('name', 'this app')}'?"):
+            return
+        ok, msg = self.analyzer.uninstall_program(app["uninstall"])
+        if ok:
+            messagebox.showinfo("Uninstaller Launched", msg)
+        else:
+            messagebox.showerror("Uninstall Failed", msg)
+
+    def _parse_size_mb(self, label):
+        if not label:
+            return 100
+        text = label.strip().upper()
+        try:
+            if text.endswith("GB"):
+                return int(text[:-2].strip()) * 1024
+            if text.endswith("MB"):
+                return int(text[:-2].strip())
+            return int(text)
+        except ValueError:
+            return 100
+
+    def _choose_dup_path(self):
+        path = filedialog.askdirectory(title="Select Folder for Duplicate Scan")
+        if path:
+            self.dup_path_var.set(path)
+
+    def _choose_lf_path(self):
+        path = filedialog.askdirectory(title="Select Folder to Scan")
+        if path:
+            self.lf_path_var.set(path)
+            self._update_lf_hero()
+
+    def _update_lf_hero(self):
+        if not hasattr(self, "lf_path_var"):
+            return
+        path = self.lf_path_var.get()
+        drive_root = os.path.splitdrive(path)[0] + "\\" if path else ""
+        free_text = "Free space unknown"
+        percent = 0
+        if drive_root and os.path.exists(drive_root):
+            try:
+                usage = psutil.disk_usage(drive_root)
+                percent = usage.percent
+                free_text = f"{format_size(usage.free)} free on {drive_root}"
+            except Exception:
+                pass
+
+        if hasattr(self, "lf_hero_title") and self.lf_hero_title.winfo_exists():
+            self.lf_hero_title.configure(text=f"Scan Path: {path}")
+        if hasattr(self, "lf_hero_subtitle") and self.lf_hero_subtitle.winfo_exists():
+            self.lf_hero_subtitle.configure(text=free_text)
+        if hasattr(self, "lf_hero_bar") and self.lf_hero_bar.winfo_exists():
+            self.lf_hero_bar.set(percent / 100 if percent else 0)
+
+    def _update_lf_scan_label(self, _=None):
+        if hasattr(self, "lf_scan_btn") and self.lf_scan_btn.winfo_exists():
+            self.lf_scan_btn.configure(text=f"🔍 Scan for Files > {self.lf_size_var.get()}")
 
     # --- Views ---
 
@@ -290,26 +400,29 @@ class CleanerApp(ctk.CTk):
         card.configure(text=f"{title}\n{subtitle}", font=("Segoe UI", 16, "bold"))
         
     def update_dashboard_stats(self, _=None):
-        if not hasattr(self, 'cpu_card') or not self.cpu_card.winfo_exists(): return
-        
+        if not hasattr(self, 'cpu_card') or not self.cpu_card.winfo_exists():
+            return
+
         try:
             # CPU
             cpu = psutil.cpu_percent()
-            self.cpu_card.update_data(f"{cpu}%", cpu/100)
-            
+            self.cpu_card.update_data(f"{cpu}%", cpu / 100)
+
             # RAM
             ram = psutil.virtual_memory()
-            self.ram_card.update_data(f"{ram.percent}%", ram.percent/100)
-            
+            self.ram_card.update_data(f"{ram.percent}%", ram.percent / 100)
+
             # Disk
             drive = self.selected_drive.get()
             if os.path.exists(drive):
                 disk = psutil.disk_usage(drive)
-                self.disk_card.update_data(f"{disk.percent}% Used", disk.percent/100)
+                self.disk_card.update_data(f"{disk.percent}% Used", disk.percent / 100)
                 self.disk_card.title_label.configure(text=f"Storage ({drive})")
-            
-            self.after(2000, self.update_dashboard_stats)
-        except: pass
+        except Exception:
+            pass
+        finally:
+            if hasattr(self, 'cpu_card') and self.cpu_card.winfo_exists():
+                self.after(2000, self.update_dashboard_stats)
 
     def show_cleaner(self):
         self.set_active_nav("cleaner")
@@ -337,6 +450,25 @@ class CleanerApp(ctk.CTk):
                                  fg_color=THEME["primary"], hover_color=THEME["primary_hover"])
             cb.pack(pady=10,padx=20, anchor="w")
             self.check_vars[cat] = var
+
+        controls = ctk.CTkFrame(options_panel, fg_color="transparent")
+        controls.pack(fill="x", padx=20, pady=(10, 0))
+        ctk.CTkButton(
+            controls,
+            text="Select All",
+            height=32,
+            fg_color=THEME["bg_sidebar"],
+            hover_color="#1f2b4d",
+            command=self._select_all_options
+        ).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        ctk.CTkButton(
+            controls,
+            text="Select None",
+            height=32,
+            fg_color=THEME["bg_sidebar"],
+            hover_color="#1f2b4d",
+            command=self._select_none_options
+        ).pack(side="left", expand=True, fill="x", padx=(5, 0))
             
         # Safe Mode Switch
         ctk.CTkFrame(options_panel, height=2, fg_color="#252a40").pack(fill="x", pady=20, padx=20)
@@ -345,9 +477,16 @@ class CleanerApp(ctk.CTk):
         ctk.CTkSwitch(options_panel, text="Safe Mode (Recycle Bin)", variable=self.safe_mode, 
                       progress_color=THEME["success"], button_color="white").pack(padx=20, anchor="w")
         
-        ctk.CTkButton(options_panel, text="Analyze Now", height=45, corner_radius=10, 
-                      fg_color=THEME["primary"], font=("Segoe UI", 15, "bold"),
-                      command=self.start_scan).pack(fill="x", padx=20, pady=(30, 0))
+        self.scan_btn = ctk.CTkButton(options_panel, text="Analyze Now", height=45, corner_radius=10, 
+                                      fg_color=THEME["primary"], font=("Segoe UI", 15, "bold"),
+                                      command=self.start_scan)
+        self.scan_btn.pack(fill="x", padx=20, pady=(30, 10))
+
+        self.scan_progress = ctk.CTkProgressBar(options_panel, height=8, progress_color=THEME["primary"])
+        self.scan_progress.set(0)
+        self.scan_progress.pack(fill="x", padx=20, pady=(0, 6))
+        self.scan_status = ctk.CTkLabel(options_panel, text="Ready to scan", text_color=THEME["text_muted"])
+        self.scan_status.pack(padx=20, anchor="w", pady=(0, 10))
         
         # Right: Results
         results_panel = ctk.CTkFrame(content, fg_color=THEME["bg_card"], corner_radius=15)
@@ -364,45 +503,138 @@ class CleanerApp(ctk.CTk):
         self.clean_btn.pack(fill="x", padx=20, pady=20)
 
     def start_scan(self):
-        self.log_box.delete("0.0", "end")
-        self.log_box.insert("end", "--- Scanning System ---\n")
-        self.clean_btn.configure(state="disabled")
-        
-        threading.Thread(target=self._scan_thread, daemon=True).start()
+        if self.is_scanning:
+            return
 
-    def _scan_thread(self):
         selected = [k for k, v in self.check_vars.items() if v.get()]
-        self.scan_results = self.scanner.scan_selected(selected)
-        
-        total = 0
-        report = ""
-        for cat, data in self.scan_results.items():
-            total += data['size']
-            report += f"[{cat}] Found {len(data['files'])} items ({format_size(data['size'])})\n"
-            
-        self.after(0, lambda: self._on_scan_finish(report, total))
+        if not selected:
+            messagebox.showinfo("Nothing Selected", "Select at least one scan category.")
+            return
 
-    def _on_scan_finish(self, report, total):
-        self.log_box.insert("end", report)
-        self.log_box.insert("end", f"\nTotal Junk: {format_size(total)}\n")
-        if total > 0:
-            self.clean_btn.configure(state="normal")
+        self.is_scanning = True
+        self.scan_btn.configure(state="disabled")
+        self.clean_btn.configure(state="disabled")
+        self.scan_progress.set(0)
+        self._set_scan_status("Scanning...")
+
+        self.log_box.delete("0.0", "end")
+        self._append_log("--- Scanning System ---")
+        
+        threading.Thread(target=self._scan_thread, args=(selected,), daemon=True).start()
+
+    def _scan_thread(self, selected):
+        def _progress(idx, total, cat, _data):
+            if total <= 0:
+                return
+            self.after(0, lambda: self._set_scan_status(f"Scanning {cat} ({idx}/{total})", idx / total))
+
+        self.scan_results = self.scanner.scan_selected(selected, progress_cb=_progress)
+
+        total_size = 0
+        total_files = 0
+        report_lines = []
+        errors = []
+
+        for cat, data in self.scan_results.items():
+            size = data.get('size', 0)
+            files = data.get('files', [])
+            total_size += size
+            total_files += len(files)
+            report_lines.append(f"[{cat}] Found {len(files)} items ({format_size(size)})")
+            if data.get('error'):
+                errors.append(f"[{cat}] {data.get('error')}")
+
+        report = "\n".join(report_lines)
+        self.after(0, lambda: self._on_scan_finish(report, total_size, total_files, errors))
+
+    def _on_scan_finish(self, report, total_size, total_files, errors):
+        self.is_scanning = False
+        self._safe_config(self.scan_btn, state="normal")
+
+        self._append_log(report)
+        self._append_log(f"\nTotal Junk: {format_size(total_size)} ({total_files} items)")
+
+        if errors:
+            self._append_log("\nWarnings:")
+            for err in errors:
+                self._append_log(f"- {err}")
+
+        if total_size > 0:
+            self._safe_config(self.clean_btn, state="normal")
+            self._set_scan_status("Scan complete", 1)
+        else:
+            self._safe_config(self.clean_btn, state="disabled")
+            self._set_scan_status("No junk found", 0)
 
     def start_clean(self):
-        if not messagebox.askyesno("Clean?", "Delete these files?"): return
-        self.log_box.insert("end", "\n--- Cleaning ---\n")
+        if self.is_cleaning:
+            return
+
+        if not self.scan_results:
+            messagebox.showinfo("Nothing to Clean", "Run a scan first.")
+            return
+
+        total_size = sum(d.get('size', 0) for d in self.scan_results.values())
+        total_files = sum(len(d.get('files', [])) for d in self.scan_results.values())
+        if total_size <= 0:
+            messagebox.showinfo("Nothing to Clean", "No junk was found in the last scan.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Confirm Clean",
+            f"Clean {total_files} items ({format_size(total_size)})?"
+        )
+        if not confirm:
+            return
+
+        self.is_cleaning = True
+        self.clean_btn.configure(state="disabled")
+        self.scan_btn.configure(state="disabled")
+        self._set_scan_status("Cleaning...", 0)
+        self._append_log("\n--- Cleaning ---")
+
         threading.Thread(target=self._clean_thread, daemon=True).start()
 
     def _clean_thread(self):
-        self.cleaner.run_safety_checks()
+        ok, msg = self.cleaner.run_safety_checks()
         total_cleaned = 0
+        total_items = 0
+        errors = []
         use_recycle = self.safe_mode.get()
-        
-        for cat, data in self.scan_results.items():
-            _, size, _ = self.cleaner.clean_category(cat, data, use_recycle)
+
+        if not ok:
+            self.after(0, lambda: self._append_log(f"Restore point warning: {msg}"))
+
+        total_cats = len(self.scan_results)
+        for idx, (cat, data) in enumerate(self.scan_results.items(), start=1):
+            count, size, errs = self.cleaner.clean_category(cat, data, use_recycle)
+            total_items += count
             total_cleaned += size
-            
-        self.after(0, lambda: self.log_box.insert("end", f"\nDone! Freed {format_size(total_cleaned)}."))
+            if errs:
+                errors.extend(errs)
+
+            self.after(0, lambda c=cat, ct=count, sz=size: self._append_log(
+                f"[{c}] Cleaned {ct} items ({format_size(sz)})"
+            ))
+            if total_cats:
+                self.after(0, lambda i=idx, t=total_cats, c=cat: self._set_scan_status(
+                    f"Cleaning {c} ({i}/{t})", i / t
+                ))
+
+        self.after(0, lambda: self._on_clean_finish(total_items, total_cleaned, errors))
+
+    def _on_clean_finish(self, total_items, total_cleaned, errors):
+        self.is_cleaning = False
+        self._safe_config(self.scan_btn, state="normal")
+        self._safe_config(self.clean_btn, state="disabled")
+        self._set_scan_status("Cleaning complete", 1)
+        self._append_log(f"\nDone! Freed {format_size(total_cleaned)} ({total_items} items).")
+        self.scan_results = {}
+
+        if errors:
+            self._append_log("\nErrors:")
+            for err in errors:
+                self._append_log(f"- {err}")
 
     def show_tools(self):
         self.set_active_nav("tools")
@@ -472,104 +704,155 @@ class CleanerApp(ctk.CTk):
 
     def _delete_startup(self, item):
         if messagebox.askyesno("Confirm", f"Remove '{item['name']}'?"):
-             self.analyzer.remove_startup_item(item)
-             self._refresh_startup()
+             ok, msg = self.analyzer.remove_startup_item(item)
+             if ok:
+                 messagebox.showinfo("Startup Updated", msg)
+                 self._refresh_startup()
+             else:
+                 messagebox.showerror("Failed to Remove", msg)
 
     def _setup_duplicates(self, parent):
-        ctk.CTkLabel(parent, text="Scan Pictures folder for identical files", text_color=THEME["text_muted"]).pack(pady=10)
-        self.dup_path = os.path.join(os.environ['USERPROFILE'], 'Pictures')
-        
-        ctk.CTkButton(parent, text="🔍 Scan Pictures", height=40, font=("Segoe UI", 14, "bold"),
-                      command=self._scan_duplicates, fg_color=THEME["primary"]).pack(fill="x", pady=10)
+        ctk.CTkLabel(parent, text="Scan a folder for identical files", text_color=THEME["text_muted"]).pack(pady=10)
+        default_root = os.environ.get('USERPROFILE') or os.path.expanduser("~")
+        default_pics = os.path.join(default_root, 'Pictures')
+        if not os.path.isdir(default_pics):
+            default_pics = default_root
+
+        self.dup_path_var = ctk.StringVar(value=default_pics)
+
+        path_row = ctk.CTkFrame(parent, fg_color="transparent")
+        path_row.pack(fill="x", padx=10)
+        ctk.CTkLabel(path_row, text="Folder:", text_color=THEME["text_muted"]).pack(side="left")
+        ctk.CTkLabel(path_row, textvariable=self.dup_path_var, anchor="w").pack(side="left", fill="x", expand=True, padx=8)
+        ctk.CTkButton(path_row, text="Change", width=90, fg_color=THEME["bg_sidebar"],
+                      hover_color="#1f2b4d", command=self._choose_dup_path).pack(side="right")
+
+        self.dup_scan_btn = ctk.CTkButton(parent, text="🔍 Scan Duplicates", height=40, font=("Segoe UI", 14, "bold"),
+                                          command=self._scan_duplicates, fg_color=THEME["primary"])
+        self.dup_scan_btn.pack(fill="x", pady=10)
                       
         self.dup_list = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         self.dup_list.pack(fill="both", expand=True)
-        self._show_empty_state(self.dup_list, "Find Duplicates", "We'll scan your Pictures folder.")
+        self._show_empty_state(self.dup_list, "Find Duplicates", "Choose a folder to scan for duplicates.")
 
     def _scan_duplicates(self):
+        if self.is_scanning_dupes:
+            return
+
+        scan_path = self.dup_path_var.get()
+        if not scan_path or not os.path.isdir(scan_path):
+            messagebox.showerror("Invalid Folder", "Select a valid folder to scan.")
+            return
+
+        self.is_scanning_dupes = True
+        self.dup_scan_btn.configure(state="disabled", text="Scanning...")
         self._show_empty_state(self.dup_list, "Scanning...", "Hashing files to find matches...")
-        threading.Thread(target=self._dup_scan_thread, daemon=True).start()
+        threading.Thread(target=self._dup_scan_thread, args=(scan_path,), daemon=True).start()
     
-    # ... (Keep existing _dup_scan_thread) ...
+    def _dup_scan_thread(self, scan_path):
+        dupes = self.analyzer.find_duplicates(scan_path)
+        self.after(0, lambda: self._on_dup_scan_finish(dupes))
+
+    def _on_dup_scan_finish(self, dupes):
+        self.is_scanning_dupes = False
+        self._safe_config(self.dup_scan_btn, state="normal", text="🔍 Scan Duplicates")
+        self._show_duplicates(dupes)
 
     def _show_duplicates(self, dupes):
-        for w in self.dup_list.winfo_children(): w.destroy()
+        for w in self.dup_list.winfo_children():
+            w.destroy()
         if not dupes:
-            self._show_empty_state(self.dup_list, "No Duplicates", "Your photos are unique!")
+            self._show_empty_state(self.dup_list, "No Duplicates", "Your files are unique!")
             return
-            
-        for h, paths in dupes.items():
+
+        for _, paths in dupes.items():
             group = ctk.CTkFrame(self.dup_list, fg_color=THEME["bg_card"], corner_radius=10)
             group.pack(fill="x", pady=8, padx=5)
-            
+
             header = ctk.CTkFrame(group, fg_color="transparent")
             header.pack(fill="x", padx=10, pady=5)
-            ctk.CTkLabel(header, text=f"Match Found ({len(paths)} copies)", font=("Segoe UI", 12, "bold"), text_color=THEME["warning"]).pack(side="left")
-            
+            ctk.CTkLabel(
+                header,
+                text=f"Match Found ({len(paths)} copies)",
+                font=("Segoe UI", 12, "bold"),
+                text_color=THEME["warning"]
+            ).pack(side="left")
+
             for p in paths:
                 row = ctk.CTkFrame(group, fg_color="transparent")
                 row.pack(fill="x", pady=2)
-                ctk.CTkLabel(row, text="📄", font=("Segoe UI", 14)).pack(side="left", padx=10)
-                ctk.CTkLabel(row, text=os.path.basename(p), anchor="w").pack(side="left")
-                ctk.CTkButton(row, text="Delete", width=60, fg_color=THEME["danger"], height=24,
-                              command=lambda f=p: self.analyzer.delete_file(f)).pack(side="right", padx=10)
 
-    def _dup_scan_thread(self):
-        dupes = self.analyzer.find_duplicates(self.dup_path)
-        self.after(0, lambda: self._show_duplicates(dupes))
+                info = ctk.CTkFrame(row, fg_color="transparent")
+                info.pack(side="left", fill="x", expand=True, padx=10, pady=6)
+                ctk.CTkLabel(info, text=os.path.basename(p), font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="x")
+                ctk.CTkLabel(info, text=os.path.dirname(p), text_color=THEME["text_muted"], anchor="w").pack(fill="x")
 
-    def _show_duplicates(self, dupes):
-        for w in self.dup_list.winfo_children(): w.destroy()
-        if not dupes:
-            ctk.CTkLabel(self.dup_list, text="No duplicates found.").pack()
-            return
-            
-        for h, paths in dupes.items():
-            group = ctk.CTkFrame(self.dup_list, fg_color="#1f2b4d")
-            group.pack(fill="x", pady=5, padx=5)
-            ctk.CTkLabel(group, text=f"Group ({len(paths)} files)", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=10, pady=5)
-            for p in paths:
-                row = ctk.CTkFrame(group, fg_color="transparent")
-                row.pack(fill="x")
-                ctk.CTkLabel(row, text=os.path.basename(p), anchor="w").pack(side="left", padx=20)
-                ctk.CTkButton(row, text="Delete", width=50, fg_color=THEME["danger"], height=24,
-                              command=lambda f=p: self.analyzer.delete_file(f)).pack(side="right", padx=10)
+                ctk.CTkButton(
+                    row,
+                    text="Delete",
+                    width=70,
+                    fg_color=THEME["danger"],
+                    height=24,
+                    command=lambda f=p, r=row: self._confirm_and_delete(f, r)
+                ).pack(side="right", padx=10)
 
     def _setup_large_files(self, parent):
         # 1. Drive Stats Hero
         hero = ctk.CTkFrame(parent, fg_color=THEME["bg_card"], corner_radius=10)
         hero.pack(fill="x", pady=(0, 10))
-        
-        drive = self.selected_drive.get()
-        try:
-            usage = psutil.disk_usage(drive)
-            percent = usage.percent
-            free_gb = format_size(usage.free)
-        except:
-            percent = 0
-            free_gb = "Unknown"
-        
-        ctk.CTkLabel(hero, text=f"Target: {drive}", font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=15, pady=(10, 0))
-        ctk.CTkLabel(hero, text=f"{free_gb} free space available", text_color=THEME["text_muted"]).pack(anchor="w", padx=15, pady=(0, 5))
-        
-        bar = ctk.CTkProgressBar(hero, height=10, progress_color=THEME["primary"])
-        bar.set(percent/100)
-        bar.pack(fill="x", padx=15, pady=(0, 15))
+
+        self.lf_path_var = ctk.StringVar(value=self.selected_drive.get())
+
+        self.lf_hero_title = ctk.CTkLabel(hero, text="Scan Path:", font=("Segoe UI", 16, "bold"))
+        self.lf_hero_title.pack(anchor="w", padx=15, pady=(10, 0))
+        self.lf_hero_subtitle = ctk.CTkLabel(hero, text="", text_color=THEME["text_muted"])
+        self.lf_hero_subtitle.pack(anchor="w", padx=15, pady=(0, 5))
+
+        self.lf_hero_bar = ctk.CTkProgressBar(hero, height=10, progress_color=THEME["primary"])
+        self.lf_hero_bar.set(0)
+        self.lf_hero_bar.pack(fill="x", padx=15, pady=(0, 15))
+        self._update_lf_hero()
 
         # 2. Action Area
         action_frame = ctk.CTkFrame(parent, fg_color="transparent")
         action_frame.pack(fill="x", pady=10)
         
-        ctk.CTkButton(action_frame, text="🔍 Scan for Large Files (>100MB)", 
-                      height=50, fg_color=THEME["primary"], font=("Segoe UI", 15, "bold"),
-                      command=self._scan_large_files).pack(fill="x")
+        path_row = ctk.CTkFrame(action_frame, fg_color="transparent")
+        path_row.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(path_row, text="Scan path:", text_color=THEME["text_muted"]).pack(side="left")
+        ctk.CTkLabel(path_row, textvariable=self.lf_path_var, anchor="w").pack(side="left", fill="x", expand=True, padx=8)
+        ctk.CTkButton(path_row, text="Change", width=90, fg_color=THEME["bg_sidebar"],
+                      hover_color="#1f2b4d", command=self._choose_lf_path).pack(side="right")
+
+        size_row = ctk.CTkFrame(action_frame, fg_color="transparent")
+        size_row.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(size_row, text="Minimum size:", text_color=THEME["text_muted"]).pack(side="left")
+        self.lf_size_var = ctk.StringVar(value="100 MB")
+        ctk.CTkOptionMenu(
+            size_row,
+            values=["100 MB", "250 MB", "500 MB", "1 GB"],
+            variable=self.lf_size_var,
+            fg_color=THEME["bg_sidebar"],
+            button_color=THEME["primary"],
+            command=self._update_lf_scan_label
+        ).pack(side="left", padx=8)
+
+        self.lf_scan_btn = ctk.CTkButton(
+            action_frame,
+            text="🔍 Scan for Files > 100 MB",
+            height=50,
+            fg_color=THEME["primary"],
+            font=("Segoe UI", 15, "bold"),
+            command=self._scan_large_files
+        )
+        self.lf_scan_btn.pack(fill="x")
 
         # 3. Results Area
         self.lf_list = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         self.lf_list.pack(fill="both", expand=True)
         
         # Empty State
-        self._show_empty_state(self.lf_list, "Ready to Scan", "Click the button above to analyze your drive.")
+        self._show_empty_state(self.lf_list, "Ready to Scan", "Click the button above to analyze the selected path.")
 
     def _show_empty_state(self, parent, title, subtitle):
         for w in parent.winfo_children(): w.destroy()
@@ -582,50 +865,84 @@ class CleanerApp(ctk.CTk):
         ctk.CTkLabel(container, text=subtitle, text_color=THEME["text_muted"]).pack()
 
     def _scan_large_files(self):
-         self._show_empty_state(self.lf_list, "Scanning...", "Please wait while we analyze the drive.")
-         threading.Thread(target=self._full_large_file_scan, daemon=True).start()
+        if self.is_scanning_large:
+            return
 
-    def _full_large_file_scan(self):
-        drive = self.selected_drive.get()
-        files = self.analyzer.find_large_files(drive)
-        self.after(0, lambda: self._show_large_files(files))
+        scan_path = self.lf_path_var.get()
+        if not scan_path or not os.path.exists(scan_path):
+            messagebox.showerror("Invalid Path", "Select a valid folder or drive to scan.")
+            return
+
+        self.is_scanning_large = True
+        self.lf_scan_btn.configure(state="disabled", text="Scanning...")
+        self._show_empty_state(self.lf_list, "Scanning...", "Please wait while we analyze the selected path.")
+        min_size_mb = self._parse_size_mb(self.lf_size_var.get())
+        threading.Thread(target=self._full_large_file_scan, args=(scan_path, min_size_mb), daemon=True).start()
+
+    def _full_large_file_scan(self, scan_path, min_size_mb):
+        files = self.analyzer.find_large_files(scan_path, min_size_mb=min_size_mb)
+        self.after(0, lambda: self._on_large_files_finish(files))
+
+    def _on_large_files_finish(self, files):
+        self.is_scanning_large = False
+        self._safe_config(self.lf_scan_btn, state="normal")
+        self._update_lf_scan_label()
+        self._show_large_files(files)
 
     def _show_large_files(self, files):
         for w in self.lf_list.winfo_children(): w.destroy()
         if not files:
-             self._show_empty_state(self.lf_list, "No Large Files Found", "Your drive is clean!")
-             return
+            self._show_empty_state(self.lf_list, "No Large Files Found", "No files exceeded the selected threshold.")
+            return
              
         # Header
         header = ctk.CTkFrame(self.lf_list, height=30, fg_color="transparent")
         header.pack(fill="x", padx=5, pady=5)
         ctk.CTkLabel(header, text="Size", width=80, anchor="w", font=("Segoe UI", 12, "bold"), text_color=THEME["text_muted"]).pack(side="left", padx=10)
-        ctk.CTkLabel(header, text="File Path", anchor="w", font=("Segoe UI", 12, "bold"), text_color=THEME["text_muted"]).pack(side="left", padx=10)
+        ctk.CTkLabel(header, text="File", anchor="w", font=("Segoe UI", 12, "bold"), text_color=THEME["text_muted"]).pack(side="left", padx=10)
 
         for path, size in files[:50]:
             row = ctk.CTkFrame(self.lf_list, fg_color=THEME["bg_card"], corner_radius=8)
             row.pack(fill="x", pady=2, padx=5)
             
             ctk.CTkLabel(row, text=f"{format_size(size)}", font=("Consolas", 12, "bold"), text_color=THEME["warning"], width=80).pack(side="left", padx=10, pady=10)
-            ctk.CTkLabel(row, text=os.path.basename(path), anchor="w").pack(side="left", fill="x", expand=True)
+            info = ctk.CTkFrame(row, fg_color="transparent")
+            info.pack(side="left", fill="x", expand=True, pady=6)
+            ctk.CTkLabel(info, text=os.path.basename(path), anchor="w", font=("Segoe UI", 12, "bold")).pack(fill="x")
+            ctk.CTkLabel(info, text=os.path.dirname(path), anchor="w", text_color=THEME["text_muted"]).pack(fill="x")
             
             ctk.CTkButton(row, text="Delete", width=60, height=30, fg_color=THEME["danger"], 
                           hover_color="#b91c1c", font=("Segoe UI", 12),
-                          command=lambda p=path: self.analyzer.delete_file(p)).pack(side="right", padx=10)
+                          command=lambda p=path, r=row: self._confirm_and_delete(p, r)).pack(side="right", padx=10)
 
     def _setup_uninstaller(self, parent):
         ctk.CTkLabel(parent, text="Manage Installed Applications", text_color=THEME["text_muted"]).pack(pady=(10, 5))
         
-        ctk.CTkButton(parent, text="🔍 Scan Installed Apps", height=40, font=("Segoe UI", 14, "bold"),
-                      command=self._load_apps, fg_color=THEME["primary"]).pack(fill="x", pady=10)
+        self.app_scan_btn = ctk.CTkButton(parent, text="🔍 Scan Installed Apps", height=40, font=("Segoe UI", 14, "bold"),
+                                          command=self._load_apps, fg_color=THEME["primary"])
+        self.app_scan_btn.pack(fill="x", pady=10)
                       
         self.app_list = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         self.app_list.pack(fill="both", expand=True)
         self._show_empty_state(self.app_list, "Uninstaller", "Scan to list installed software.")
 
     def _load_apps(self):
-         self._show_empty_state(self.app_list, "Scanning...", "Reading registry for installed programs...")
-         threading.Thread(target=lambda: self.after(0, lambda: self._show_apps(self.analyzer.get_installed_programs())), daemon=True).start()
+        if self.is_loading_apps:
+            return
+
+        self.is_loading_apps = True
+        self._safe_config(self.app_scan_btn, state="disabled", text="Scanning...")
+        self._show_empty_state(self.app_list, "Scanning...", "Reading registry for installed programs...")
+        threading.Thread(target=self._load_apps_thread, daemon=True).start()
+
+    def _load_apps_thread(self):
+        apps = self.analyzer.get_installed_programs()
+        self.after(0, lambda: self._on_apps_loaded(apps))
+
+    def _on_apps_loaded(self, apps):
+        self.is_loading_apps = False
+        self._safe_config(self.app_scan_btn, state="normal", text="🔍 Scan Installed Apps")
+        self._show_apps(apps)
 
     def _show_apps(self, apps):
         for w in self.app_list.winfo_children(): w.destroy()
@@ -645,4 +962,4 @@ class CleanerApp(ctk.CTk):
             
             ctk.CTkLabel(row, text=app['name'], anchor="w", font=("Segoe UI", 13, "bold")).pack(side="left", padx=15, fill="x", expand=True)
             ctk.CTkButton(row, text="Uninstall", width=80, fg_color=THEME["danger"], height=30,
-                          command=lambda c=app['uninstall']: self.analyzer.uninstall_program(c)).pack(side="right", padx=15, pady=5)
+                          command=lambda a=app: self._confirm_uninstall(a)).pack(side="right", padx=15, pady=5)

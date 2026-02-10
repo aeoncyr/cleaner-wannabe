@@ -10,15 +10,19 @@ class SafetyManager:
 
     def setup_logging(self):
         log_dir = "logs"
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-            
-        log_file = os.path.join(log_dir, f"cleaner_{datetime.date.today()}.log")
-        logging.basicConfig(
-            filename=log_file,
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, f"cleaner_{datetime.date.today()}.log")
+            logging.basicConfig(
+                filename=log_file,
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s'
+            )
+        except Exception:
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s'
+            )
         self.logger = logging.getLogger('SafetyLogger')
 
     def log_action(self, message):
@@ -39,13 +43,18 @@ class SafetyManager:
             # We run this via powershell
             # Note: This requires the feature to be enabled on Windows.
             import subprocess
-            result = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True)
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
             
             if result.returncode == 0:
                 self.log_action(f"Restore Point created: {description}")
                 return True, "Restore Point Created"
             else:
-                err = result.stderr.strip()
+                err = (result.stderr or result.stdout).strip()
                 self.log_error(f"Failed to create restore point: {err}")
                 return False, f"Failed: {err}"
         except Exception as e:

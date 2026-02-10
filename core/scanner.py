@@ -21,7 +21,11 @@ class Scanner:
         if not is_admin():
              return {'files': [], 'size': 0}
 
-        log_path = os.path.join(os.environ.get('SystemRoot'), 'Logs')
+        system_root = os.environ.get('SystemRoot')
+        if not system_root:
+            return {'files': [], 'size': 0}
+
+        log_path = os.path.join(system_root, 'Logs')
         return self._generic_scan(log_path, ['.log'])
 
     def scan_crash_dumps(self):
@@ -122,7 +126,11 @@ class Scanner:
         if not is_admin():
             return {'files': [], 'size': 0}
             
-        prefetch_path = os.path.join(os.environ.get('SystemRoot'), 'Prefetch')
+        system_root = os.environ.get('SystemRoot')
+        if not system_root:
+            return {'files': [], 'size': 0}
+
+        prefetch_path = os.path.join(system_root, 'Prefetch')
         files_found = []
         total_size = 0
         
@@ -144,13 +152,25 @@ class Scanner:
 
 
 
-    def scan_selected(self, selected_categories):
-        # Reset results for selected only or all?
-        # Let's clean scan_results for selected
-        for cat in selected_categories:
-            if cat in self.categories:
-                self.scan_results[cat] = self.categories[cat]()
-        return self.scan_results
+    def scan_selected(self, selected_categories, progress_cb=None):
+        results = {}
+        total = len(selected_categories)
+        for idx, cat in enumerate(selected_categories, start=1):
+            if cat not in self.categories:
+                continue
+            try:
+                results[cat] = self.categories[cat]()
+            except Exception as exc:
+                results[cat] = {'files': [], 'size': 0, 'error': str(exc)}
+            if progress_cb:
+                try:
+                    progress_cb(idx, total, cat, results[cat])
+                except Exception:
+                    # Progress callbacks should never break scans
+                    pass
+
+        self.scan_results = results
+        return results
 
     def scan_all(self):
         return self.scan_selected(self.categories.keys())
