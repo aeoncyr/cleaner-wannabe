@@ -1,6 +1,5 @@
 import unittest
 import os
-import shutil
 import sys
 from unittest.mock import MagicMock
 

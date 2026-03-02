@@ -1,13 +1,14 @@
 # Cleaner Wannabe
 
-**Cleaner Wannabe** is a modern, user-friendly system optimization tool for Windows. It helps you reclaim disk space, manage startup programs, and keep your system running smoothly with a "Comfy & Trusty" interface.
+*these are made using AI as I am to lazy to make it myself :)*
 
-![Cleaner Wannabe Screenshot](https://via.placeholder.com/800x500?text=Cleaner+Wannabe+UI+Placeholder)
-*(Replace with actual screenshot)*
+**Cleaner Wannabe** is a modern, user-friendly system optimization tool for Windows. It helps you reclaim disk space, manage startup programs, and keep your system running smoothly with a "Comfy & Trusty" interface.
 
 ## ✨ Features
 
--   **🧹 Smart System Cleaner**: Safely clean temporary files, prefetch data, browser caches (Chrome & Edge), and Recycle Bin.
+-   **🧹 Smart System Cleaner**: Safely clean temporary files, prefetch data, browser caches (Chrome & Edge), Windows Update cache, thumbnail cache, DirectX shader cache, error reports, and Recycle Bin.
+-   **🧭 Scan Summary & Review**: Per-category breakdown with item preview before cleaning.
+-   **🧪 Safety Filters**: Clean only files older than a selected age to avoid removing recent items.
 -   **🔍 Large File Finder**: Visualize and manage large files cluttering your drives. Features a "Safe Delete" (Send to Recycle Bin) option.
 -   **🚀 Startup Manager**: View and disable programs that slow down your Windows boot time.
 -   **👯 Duplicate File Finder**: Scan specific folders (like Pictures) for identical files to save space.
@@ -21,7 +22,7 @@
 ## 🛠️ Technology Stack
 
 -   **Python 3.12+**
--   **GUI**: `customtkinter` (Modern, dark-mode ready UI)
+-   **GUI**: `PySide6` (Qt 6)
 -   **System Interaction**: `psutil`, `ctypes`, `winshell`, `winreg`
 -   **Safety**: `send2trash`
 
@@ -46,11 +47,11 @@
     .\venv\Scripts\activate
     ```
 
-3.  Install dependencies:
+50.  Install dependencies:
     ```bash
     pip install -r requirements.txt
     ```
-    *(Note: You may need to create a requirements.txt file if one doesn't exist, containing: `customtkinter`, `psutil`, `send2trash`, `darkdetect`, `pillow`, `winshell`)*
+    *(Note: Ensure your `requirements.txt` contains the updated stack: `PySide6`, `psutil`, `send2trash`, `winshell`, `WMI`, `pypiwin32`)*
 
 ### Usage
 
@@ -63,6 +64,3 @@ python main.py
 ## 📝 License
 
 This project is open-source and available under the [MIT License](LICENSE).
-
----
-*Developed with ❤️ by Advan Workplus*

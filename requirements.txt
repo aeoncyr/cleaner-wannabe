@@ -5,3 +5,4 @@ pillow
 darkdetect
 psutil
 send2trash
+PySide6

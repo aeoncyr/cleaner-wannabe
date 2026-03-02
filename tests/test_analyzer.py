@@ -44,9 +44,11 @@ class TestAnalyzer(unittest.TestCase):
         f3 = os.path.join(test_dir, "unique.txt")
         
         import shutil
-        with open(f1, "wb") as f: f.write(b"contents" * 200) # Ensure > 1KB to pass filter
+        with open(f1, "wb") as f:
+            f.write(b"contents" * 200) # Ensure > 1KB to pass filter
         shutil.copy(f1, f2)
-        with open(f3, "wb") as f: f.write(b"different" * 200)
+        with open(f3, "wb") as f:
+            f.write(b"different" * 200)
         
         dupes = self.analyzer.find_duplicates(test_dir)
         

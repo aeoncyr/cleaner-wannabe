@@ -3,7 +3,6 @@ import winreg
 import send2trash
 import hashlib
 import subprocess
-from core.utils import format_size
 
 class Analyzer:
     def find_large_files(self, start_path, min_size_mb=100):
@@ -87,9 +86,9 @@ class Analyzer:
                         if size not in size_groups:
                             size_groups[size] = []
                         size_groups[size].append(filepath)
-                    except:
+                    except Exception:
                         pass
-        except:
+        except Exception:
             return {}
 
         # 2. Hash candidates
@@ -106,7 +105,7 @@ class Analyzer:
                     if file_hash not in duplicates:
                         duplicates[file_hash] = []
                     duplicates[file_hash].append(fpath)
-                except:
+                except Exception:
                     pass
 
         # Filter out unique hashes

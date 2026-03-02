@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.cleaner import Cleaner
-from core.safety import SafetyManager
 
 class TestSafety(unittest.TestCase):
     def setUp(self):

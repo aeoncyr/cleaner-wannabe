@@ -1,6 +1,5 @@
 import os
 import winshell
-import shutil
 import send2trash
 from core.safety import SafetyManager
 
